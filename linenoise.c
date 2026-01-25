@@ -869,6 +869,47 @@ void refreshShowHints(struct abuf *ab, struct linenoiseState *l, int pwidth) {
     }
 }
 
+static int isAnsiEscape(const char *buf, size_t buf_len, size_t *offset) {
+    if (buf_len <= 2 || memcmp("\033[", buf, 2) != 0) {
+        return 0;
+    }
+
+    for (size_t i = 2; i < buf_len; ++i) {
+        // clang-format off
+        switch (buf[i]) {
+            case 'A': case 'B': case 'C': case 'D': case 'E': case 'F':
+            case 'G': case 'H': case 'J': case 'K': case 'S': case 'T':
+            case 'f': case 'm':
+                *offset = i;
+                return 1;
+            default:
+                continue;
+        }
+        // clang-format on
+    }
+
+    return 0;
+}
+
+static size_t promptTextWidth(const char *prompt, size_t prompt_len) {
+    char buf[LINENOISE_MAX_LINE];
+    size_t buf_len = 0;
+    size_t offset = 0;
+
+    while (offset < prompt_len) {
+        size_t skip_len;
+
+        if (isAnsiEscape(prompt + offset, prompt_len - offset, &skip_len)) {
+            offset += skip_len + 1;
+            continue;
+        }
+
+        buf[buf_len++] = prompt[offset++];
+    }
+
+    return utf8StrWidth(buf, buf_len);
+}
+
 /* Single line low level line refresh.
  *
  * Rewrite the currently edited line accordingly to the buffer content,
@@ -881,7 +922,7 @@ void refreshShowHints(struct abuf *ab, struct linenoiseState *l, int pwidth) {
  * for cursor positioning and horizontal scrolling. */
 static void refreshSingleLine(struct linenoiseState *l, int flags) {
     char seq[64];
-    size_t pwidth = utf8StrWidth(l->prompt, l->plen); /* Prompt display width */
+    size_t pwidth = promptTextWidth(l->prompt, l->plen); /* Prompt display width */
     int fd = l->ofd;
     char *buf = l->buf;
     size_t len = l->len;    /* Byte length of buffer to display */
@@ -962,7 +1003,7 @@ static void refreshSingleLine(struct linenoiseState *l, int flags) {
  * This function is UTF-8 aware and uses display widths for positioning. */
 static void refreshMultiLine(struct linenoiseState *l, int flags) {
     char seq[64];
-    size_t pwidth = utf8StrWidth(l->prompt, l->plen);  /* Prompt display width */
+    size_t pwidth = promptTextWidth(l->prompt, l->plen);  /* Prompt display width */
     size_t bufwidth = utf8StrWidth(l->buf, l->len);    /* Buffer display width */
     size_t poswidth = utf8StrWidth(l->buf, l->pos);    /* Cursor display width */
     int rows = (pwidth+bufwidth+l->cols-1)/l->cols;    /* rows used by current buf. */
@@ -1105,7 +1146,7 @@ int linenoiseEditInsert(struct linenoiseState *l, const char *c, size_t clen) {
             l->len += clen;
             l->buf[l->len] = '\0';
             if ((!mlmode &&
-                 utf8StrWidth(l->prompt,l->plen)+utf8StrWidth(l->buf,l->len) < l->cols &&
+                 promptTextWidth(l->prompt,l->plen)+utf8StrWidth(l->buf,l->len) < l->cols &&
                  !hintsCallback)) {
                 /* Avoid a full update of the line in the trivial case:
                  * single-width char, no hints, fits in one line. */
